@@ -38,18 +38,22 @@ import br.com.livresom.core.Ranking
 import br.com.livresom.core.Player
 import br.com.livresom.core.Saved
 import br.com.livresom.core.Search
+import br.com.livresom.core.SearchOptions
+import br.com.livresom.core.SearchFilter
 import br.com.livresom.core.Track
 import java.util.concurrent.Executors
 import java.text.NumberFormat
 import java.util.Locale
 
 class MainActivity : Activity() {
-    private val bg=Color.rgb(11,17,26)
-    private val panelColor=Color.rgb(25,35,48)
-    private val panelAlt=Color.rgb(35,45,59)
-    private val white=Color.rgb(241,246,250)
-    private val muted=Color.rgb(159,176,191)
-    private val accent=Color.rgb(99,230,198)
+    // Steam-inspired navy storefront styling without Steam logos or artwork.
+    private val bg=Color.rgb(23,26,33)
+    private val panelColor=Color.rgb(27,40,56)
+    private val panelAlt=Color.rgb(42,71,94)
+    private val white=Color.rgb(236,243,249)
+    private val muted=Color.rgb(164,184,199)
+    private val accent=Color.rgb(102,192,244)
+    private val green=Color.rgb(164,208,7)
     private val main=Handler(Looper.getMainLooper())
     private val workers=Executors.newFixedThreadPool(3)
     private lateinit var library:Library
@@ -70,6 +74,13 @@ class MainActivity : Activity() {
     private var filter=0
     private var browseMode=0 // 0 = pesquisa, 1 = mais baixadas, 2 = mais ouvidas por você
     private var selectedCategory="all"
+    private var onlyDownloads=false
+    private var withCover=false
+    private var exactMatch=true
+    private var searchField=0
+    private var sortMode=0
+    private var filtersVisible=false
+    private var searchHasRun=false
     private var lastQuery=""
     private var serial=0
     private var searching=false
@@ -133,21 +144,24 @@ class MainActivity : Activity() {
         }
         val header=horizontal().apply {
             gravity=Gravity.CENTER_VERTICAL
-            setPadding(dp(20),dp(16),dp(20),dp(10))
+            setPadding(dp(17),dp(16),dp(17),dp(14))
+            background=GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.rgb(37,66,96),panelColor,bg))
         }
-        val logo=text("♫",30f,bg,true).apply {
-            gravity=Gravity.CENTER;background=rounded(accent,15)
+        val logo=text("♫",30f,white,true).apply {
+            gravity=Gravity.CENTER
+            background=rounded(panelAlt,7)
         }
         header.addView(logo,LinearLayout.LayoutParams(dp(53),dp(53)))
         val names=vertical().apply { setPadding(dp(12),0,0,0) }
-        names.addView(text("FreeSound",24f,white,true))
-        names.addView(text("Música livre e biblioteca offline",12f,muted))
+        names.addView(text("FREESOUND",21f,white,true))
+        names.addView(text("DESCUBRA • OUÇA • SALVE",10f,accent,true))
         header.addView(names,LinearLayout.LayoutParams(0,-2,1f))
         root.addView(header)
 
         searchRow=horizontal().apply { setPadding(dp(17),dp(8),dp(17),dp(9)) }
         searchEdit=EditText(this).apply {
-            hint="Buscar música ou artista..."
+            hint="Música, artista ou palavra-chave"
             setSingleLine(true);textSize=14f
             setTextColor(white);setHintTextColor(muted)
             setPadding(dp(12),0,dp(9),0)
@@ -156,8 +170,8 @@ class MainActivity : Activity() {
             setOnEditorActionListener { _,_,_-> startSearch();true }
         }
         searchRow.addView(searchEdit,LinearLayout.LayoutParams(0,dp(48),1f))
-        searchRow.addView(button("Buscar",true) { startSearch() },
-            LinearLayout.LayoutParams(dp(84),dp(48)).apply { leftMargin=dp(8) })
+        searchRow.addView(button("BUSCAR",true) { startSearch() },
+            LinearLayout.LayoutParams(dp(88),dp(48)).apply { leftMargin=dp(8) })
         root.addView(searchRow)
 
         val scroller=ScrollView(this)
@@ -202,17 +216,17 @@ class MainActivity : Activity() {
         root.addView(playerPanel)
 
         nav=horizontal().apply {
-            setPadding(dp(11),dp(8),dp(11),dp(8))
-            setBackgroundColor(bg)
+            setPadding(dp(12),dp(10),dp(12),dp(9))
+            setBackgroundColor(panelColor)
         }
         root.addView(nav)
     }
     private fun render() {
         content.removeAllViews();nav.removeAllViews()
         searchRow.visibility=if(tab==0 && browseMode!=2) View.VISIBLE else View.GONE
-        listOf("Buscar","Biblioteca","Fontes").forEachIndexed { i,name ->
-            nav.addView(button(name,i==tab) { tab=i;render() },
-                LinearLayout.LayoutParams(0,dp(44),1f).apply { marginEnd=dp(5) })
+        listOf("⌂  Descobrir","♫  Biblioteca","◈  Fontes").forEachIndexed { i,name ->
+            nav.addView(navButton(name,i==tab) { tab=i;render() },
+                LinearLayout.LayoutParams(0,dp(47),1f).apply { marginEnd=dp(5) })
         }
         when(tab) {
             0->renderSearch()
@@ -221,132 +235,179 @@ class MainActivity : Activity() {
         }
     }
     private fun renderSearch() {
-        heading("Descubra músicas",
-            "Explore por estilo ou consulte as músicas que você realmente ouviu.")
-        val sorting=horizontal()
-        listOf("Pesquisar","Mais baixadas","Mais ouvidas").forEachIndexed { i,label ->
-            sorting.addView(button(label,browseMode==i) { selectBrowseMode(i) },
-                LinearLayout.LayoutParams(0,dp(40),1f).apply { marginEnd=dp(4) })
+        content.addView(text("SUA CENTRAL DE MÚSICA",10f,accent,true))
+        space(5)
+        heading("Descubra algo novo","Encontre faixas com filtros mais precisos.")
+        val modes=horizontal()
+        listOf("EXPLORAR","MAIS BAIXADAS","SUAS OUVIDAS").forEachIndexed { i,label ->
+            modes.addView(button(label,browseMode==i) { selectBrowseMode(i) },
+                LinearLayout.LayoutParams(0,dp(44),1f).apply { marginEnd=dp(5) })
         }
-        content.addView(sorting)
-        space(10)
-
+        content.addView(modes)
+        space(15)
         if(browseMode==2) {
-            note("Mais ouvidas por você",
-                "Histórico deste dispositivo. Uma reprodução é registrada após ouvir " +
-                "20 segundos reais (ou 55% de áudios curtos). Não é ranking mundial.")
-            val history=listening.mostListened()
-            if(history.isEmpty()) note("Sem histórico ainda",
-                "Ouça músicas pelo reprodutor para montar seu ranking pessoal.")
-            history.forEach { songCard(it.track,it.plays) }
+            sectionTitle("SUAS MAIS OUVIDAS","Ordenadas por reproduções neste celular")
+            val items=listening.mostListened()
+            if(items.isEmpty()) note("Sem histórico","Toque para ouvir uma faixa e complete ao menos 20 segundos.")
+            items.forEach { songCard(it.track,it.plays) }
             return
         }
-
-        if(browseMode==1) note("Mais baixadas do Internet Archive",
-            "Contagem acumulada dos downloads de cada item no Archive. " +
-            "Não corresponde necessariamente a reproduções da faixa.")
-        content.addView(text("Categorias",17f,white,true))
-        space(4)
-        content.addView(text("Estilos usados na pesquisa. A classificação depende dos metadados da fonte.",11f,muted))
-        space(9)
-        val categoryScroll=HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled=false
-        }
+        if(browseMode==1) note("TOP DOWNLOADS · INTERNET ARCHIVE",
+            "Contagem acumulada por item do Archive, não um ranking global de audições.")
+        sectionTitle("NAVEGAR POR ESTILOS","A categoria complementa sua busca")
+        val scroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false }
         val categories=horizontal()
-        val all=listOf(Pair("all","Todas"))+Categories.options.map { Pair(it.id,it.title) }
-        all.forEach { (id,label) ->
-            val b=button(label,selectedCategory==id) { selectCategory(id) }
-            categories.addView(b,LinearLayout.LayoutParams(-2,dp(38)).apply {
-                marginEnd=dp(7)
-            })
+        (listOf(Pair("all","Todos"))+Categories.options.map { Pair(it.id,it.title) }).forEach { pair ->
+            categories.addView(button(pair.second,selectedCategory==pair.first) {
+                selectCategory(pair.first)
+            },LinearLayout.LayoutParams(-2,dp(40)).apply { marginEnd=dp(7) })
         }
-        categoryScroll.addView(categories)
-        content.addView(categoryScroll)
-        space(12)
-
+        scroll.addView(categories)
+        content.addView(scroll)
+        space(15)
         if(browseMode==0) {
-            val chips=horizontal()
-            listOf("Todas","Commons","Archive","Openverse").forEachIndexed { i,name ->
-                chips.addView(button(name,i==filter) { filter=i;render() },
+            sectionTitle("FONTES","Busque em todos ou em um catálogo específico")
+            val sources=horizontal()
+            listOf("Todos","Archive","Commons","Openverse").forEachIndexed { i,name ->
+                sources.addView(button(name,filter==i) {
+                    if(filter!=i) { filter=i;requeryOrClear() }
+                },LinearLayout.LayoutParams(0,dp(39),1f).apply { marginEnd=dp(4) })
+            }
+            content.addView(sources)
+            space(10)
+        }
+        val quick=horizontal()
+        quick.addView(button(if(onlyDownloads) "✓ Com download" else "↓ Só downloads",onlyDownloads) {
+            onlyDownloads=!onlyDownloads;render()
+        },LinearLayout.LayoutParams(0,dp(41),1f).apply { marginEnd=dp(5) })
+        quick.addView(button(if(filtersVisible) "⌃ Ocultar filtros" else "☷ Mais filtros",filtersVisible) {
+            filtersVisible=!filtersVisible;render()
+        },LinearLayout.LayoutParams(0,dp(41),1f))
+        content.addView(quick)
+        if(filtersVisible) {
+            space(9)
+            val box=panel()
+            box.addView(text("REFINAR BUSCA",12f,accent,true))
+            spaceIn(box,9)
+            box.addView(text("Pesquisar em",12f,muted))
+            val fields=horizontal()
+            listOf("Tudo","Título","Artista").forEachIndexed { i,label ->
+                fields.addView(button(label,searchField==i) { searchField=i;render() },
                     LinearLayout.LayoutParams(0,dp(37),1f).apply { marginEnd=dp(4) })
             }
-            content.addView(chips)
-            space(12)
+            box.addView(fields)
+            spaceIn(box,9)
+            box.addView(text("Ordenar resultados",12f,muted))
+            val sorts=horizontal()
+            listOf("Relevância","Downloads","A–Z").forEachIndexed { i,label ->
+                sorts.addView(button(label,sortMode==i) { sortMode=i;render() },
+                    LinearLayout.LayoutParams(0,dp(37),1f).apply { marginEnd=dp(4) })
+            }
+            box.addView(sorts)
+            spaceIn(box,9)
+            val choices=horizontal()
+            choices.addView(button(if(exactMatch) "✓ Correspondências" else "Incluir relacionados",exactMatch) {
+                exactMatch=!exactMatch;render()
+            },LinearLayout.LayoutParams(0,dp(39),1f).apply { marginEnd=dp(5) })
+            choices.addView(button(if(withCover) "✓ Com capa" else "Com capa",withCover) {
+                withCover=!withCover;render()
+            },LinearLayout.LayoutParams(0,dp(39),1f))
+            box.addView(choices)
+            spaceIn(box,9)
+            box.addView(button("LIMPAR FILTROS",false) { clearFilters() },
+                LinearLayout.LayoutParams(-1,dp(39)))
+            content.addView(box)
         }
-        if(searching) note("Pesquisando...","Consultando os catálogos de áudio.")
-        if(!searching && songs.isEmpty()) {
-            note("Pesquise um estilo ou artista",
-                "Selecione uma categoria acima ou digite um nome na pesquisa.")
-        }
-        if(errors.isNotEmpty()) note("Fontes indisponíveis",
-            errors.joinToString("; ").take(230))
-
-        val filtered=songs.filter { track ->
-            if(browseMode==1) track.source=="Internet Archive" && track.downloadsCount>=0L
-            else filter==0 || when(filter) {
-                1->track.source=="Wikimedia Commons"
-                2->track.source=="Internet Archive"
-                else->track.source=="Openverse"
+        space(16)
+        val options=SearchOptions(
+            words=searchEdit.text.toString(),
+            source=if(browseMode==0) sourceName() else "Internet Archive",
+            onlyDownloadable=onlyDownloads,onlyArtwork=withCover,
+            field=searchField,strict=exactMatch,
+            sort=if(browseMode==1 && sortMode==0) 1 else sortMode
+        )
+        val filtered=SearchFilter.results(songs,options)
+        val count=if(searching) "Consultando catálogos…" else
+            if(!searchHasRun) "Escolha uma categoria ou digite para pesquisar."
+            else filtered.size.toString()+" de "+songs.size.toString()+" resultados"
+        sectionTitle("RESULTADOS",count)
+        if(searching) note("Buscando músicas","Algumas fontes respondem mais lentamente.")
+        if(errors.isNotEmpty()) note("Fontes indisponíveis",errors.joinToString("; ").take(220))
+        if(!searching && !searchHasRun) {
+            val featured=panel()
+            featured.addView(text("DESCUBRA SEU PRÓXIMO SOM",18f,white,true))
+            spaceIn(featured,7)
+            tiny(featured,"Explore por estilo, pesquise músicas ou filtre por disponibilidade de download.")
+            spaceIn(featured,10)
+            featured.addView(button("EXPLORAR INSTRUMENTAL",true) { selectCategory("instrumental") },
+                LinearLayout.LayoutParams(-1,dp(45)))
+            content.addView(featured)
+        } else if(!searching && filtered.isEmpty()) {
+            note("Nenhuma correspondência","Altere os filtros, a categoria ou a fonte.")
+            if(exactMatch && searchEdit.text.isNotBlank()) {
+                content.addView(button("MOSTRAR RESULTADOS RELACIONADOS",true) {
+                    exactMatch=false;render()
+                },LinearLayout.LayoutParams(-1,dp(44)))
             }
         }
-        val ordered=if(browseMode==1) Ranking.mostDownloaded(filtered) else filtered
-        ordered.forEach { songCard(it) }
+        filtered.forEach { songCard(it) }
     }
 
+    private fun sourceName():String=when(filter) {
+        1 -> "Internet Archive"
+        2 -> "Wikimedia Commons"
+        3 -> "Openverse"
+        else -> "Todas"
+    }
+    private fun sectionTitle(label:String,detail:String) {
+        content.addView(text(label,14f,white,true))
+        space(4)
+        content.addView(text(detail,11f,muted))
+        space(10)
+    }
+    private fun clearFilters() {
+        onlyDownloads=false;withCover=false;exactMatch=true
+        searchField=0;sortMode=0;filter=0;selectedCategory="all"
+        requeryOrClear()
+    }
     private fun selectBrowseMode(mode:Int) {
         if(mode==browseMode) return
         browseMode=mode
-        if(mode==2) {
-            serial++
-            searching=false
-            errors.clear()
-            render()
-        } else {
-            requeryOrClear()
-        }
+        if(mode==2) { serial++;searching=false;errors.clear();render() }
+        else requeryOrClear()
     }
-
     private fun selectCategory(id:String) {
-        if(id==selectedCategory) return
+        if(selectedCategory==id) return
         selectedCategory=id
         requeryOrClear()
     }
-
     private fun requeryOrClear() {
         val q=Categories.queryFor(selectedCategory,searchEdit.text.toString())
-        if(q.length>=2) startSearch()
+        if(q.length>=2 || browseMode==1) startSearch()
         else {
-            serial++
-            searching=false
-            songs.clear()
-            errors.clear()
-            render()
+            serial++;searching=false;searchHasRun=false
+            songs.clear();errors.clear();render()
         }
     }
-
     private fun startSearch() {
         if(browseMode==2) { render();return }
-        val term=Categories.queryFor(selectedCategory,searchEdit.text.toString())
-        if(term.length<2) { toast("Digite ao menos 2 caracteres ou escolha uma categoria");return }
-        lastQuery=term
-        serial++
+        val combined=Categories.queryFor(selectedCategory,searchEdit.text.toString())
+        val term=combined.ifBlank { if(browseMode==1) "music" else "" }
+        if(term.length<2) { toast("Informe título, artista ou escolha um estilo");return }
+        lastQuery=term;serial++
         val request=serial
-        completed=0;searching=true;songs.clear();errors.clear();render()
-        val sources=if(browseMode==1) {
-            listOf(Pair("Internet Archive", { Search.archive(term,true) }))
-        } else {
-            listOf(
-                Pair("Wikimedia", { Search.commons(term) }),
-                Pair("Internet Archive", { Search.archive(term) }),
-                Pair("Openverse", { Search.openverse(term) })
-            )
-        }
+        completed=0;searching=true;searchHasRun=true
+        songs.clear();errors.clear();render()
+        val sources=if(browseMode==1) listOf(Pair("Internet Archive",{ Search.archive(term,true) }))
+        else listOf(
+            Pair("Wikimedia Commons",{ Search.commons(term) }),
+            Pair("Internet Archive",{ Search.archive(term) }),
+            Pair("Openverse",{ Search.openverse(term) })
+        ).filter { sourceName()=="Todas" || it.first==sourceName() }
         sources.forEach { (name,call) ->
             workers.execute {
-                val result=try { call() } catch(_:Exception) {
-                    runOnUiThread {
-                        if(serial==request) { errors.add("$name: indisponível");render() }
-                    }
+                val result=try { call() } catch (_:Exception) {
+                    runOnUiThread { if(serial==request) { errors.add(name);render() } }
                     emptyList()
                 }
                 runOnUiThread {
@@ -362,10 +423,10 @@ class MainActivity : Activity() {
     private fun songCard(t:Track,personalPlays:Int=0) {
         val box=panel()
         val headingRow=horizontal().apply { gravity=Gravity.CENTER_VERTICAL }
-        headingRow.addView(cover(t),LinearLayout.LayoutParams(dp(76),dp(76)).apply { marginEnd=dp(12) })
+        headingRow.addView(cover(t),LinearLayout.LayoutParams(dp(90),dp(90)).apply { marginEnd=dp(12) })
         val information=vertical()
         information.addView(text(t.title,16f,white,true).apply { maxLines=2 })
-        tiny(information,t.artist+" • "+t.source)
+        tiny(information,t.artist+"  ·  "+t.source)
         if(personalPlays>0) {
             spaceIn(information,4)
             information.addView(text("$personalPlays reproduções suas",11f,accent))
@@ -375,16 +436,19 @@ class MainActivity : Activity() {
             information.addView(text(formatDownloads(t.downloadsCount)+" downloads do item",11f,muted))
             spaceIn(information,3)
         }
-        information.addView(text(t.license.ifBlank { "Verificar direitos" },11f,accent))
+        information.addView(text(
+            if(t.downloadable) "↓  DOWNLOAD AUTORIZADO" else "↗  CONSULTAR NA ORIGEM",
+            10f,if(t.downloadable) green else accent,true))
+        information.addView(text(t.license.ifBlank { "Licença não verificada" },10f,muted))
         headingRow.addView(information,LinearLayout.LayoutParams(0,-2,1f))
         box.addView(headingRow)
         spaceIn(box,11)
         val row=horizontal()
-        row.addView(button("Ouvir",true) { preview(t) },weight())
+        row.addView(button("▶  Ouvir",true) { preview(t) },weight())
         row.addView(button(if(library.favorite(t)) "♥" else "♡",false) {
             library.toggle(t);render()
         },weight())
-        row.addView(button(if(t.downloadable) "Baixar" else "Origem",false) {
+        row.addView(button(if(t.downloadable) "↓ Baixar" else "↗ Origem",false) {
             if(t.downloadable) startDownload(t) else openPage(t.page)
         },weight())
         box.addView(row)
@@ -393,7 +457,7 @@ class MainActivity : Activity() {
         row2.addView(button("Página original",false) { openPage(t.page) },weight())
         row2.addView(button("Créditos",false) { copyCredits(t) },weight())
         box.addView(row2)
-        content.addView(box,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(9) })
+        content.addView(box,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(12) })
     }
     private fun formatDownloads(count:Long)=NumberFormat.getIntegerInstance(Locale("pt","BR")).format(count)
     private fun cover(t:Track,local:Uri?=null)=ImageView(this).apply {
@@ -403,7 +467,7 @@ class MainActivity : Activity() {
         ArtworkLoader.bind(this@MainActivity,this,t,local)
     }
     private fun renderLibrary() {
-        heading("Minha biblioteca","Arquivos salvos e suas músicas favoritas.")
+        heading("Sua biblioteca","Arquivos offline, músicas importadas e faixas favoritas.")
         content.addView(button("Importar áudio do celular",true) { importAudio() },
             LinearLayout.LayoutParams(-1,dp(46)))
         space(12)
@@ -443,7 +507,7 @@ class MainActivity : Activity() {
         favs.forEach { songCard(it) }
     }
     private fun renderSources() {
-        heading("Fontes musicais","Downloads variam conforme as licenças de cada obra.")
+        heading("Fontes musicais","Catálogos originais e informações sobre as licenças.")
         note("Integradas","Wikimedia Commons, Internet Archive e Openverse. O Openverse abre o site de origem para downloads.")
         val sources=listOf(
             Triple("Wikimedia Commons","Domínio público e licenças abertas","https://commons.wikimedia.org/wiki/Category:Audio_files"),
@@ -555,7 +619,17 @@ class MainActivity : Activity() {
     }
     private fun panel()=vertical().apply {
         setPadding(dp(13),dp(13),dp(13),dp(13))
-        background=rounded(panelColor,13)
+        background=rounded(panelColor,7)
+    }
+    private fun navButton(label:String,selected:Boolean,onClick:()->Unit)=button(label,selected,onClick).apply {
+        textSize=12f
+        if(selected) {
+            background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.rgb(62,116,149),panelAlt)).apply {
+                cornerRadius=dp(7).toFloat()
+            }
+            setTextColor(white)
+        }
     }
     private fun rounded(color:Int,radius:Int)=GradientDrawable().apply {
         shape=GradientDrawable.RECTANGLE
@@ -570,7 +644,10 @@ class MainActivity : Activity() {
         text=value;textSize=12f;isAllCaps=false
         setTextColor(if(primary) bg else white)
         setTypeface(typeface,Typeface.BOLD)
-        background=rounded(if(primary) accent else panelAlt,10)
+        background=if(primary) GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(Color.rgb(101,178,224),accent)).apply { cornerRadius=dp(7).toFloat() }
+        else rounded(panelAlt,7)
         minHeight=0;minWidth=0
         setPadding(dp(6),0,dp(6),0)
         setOnClickListener { onClick() }

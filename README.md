@@ -3,6 +3,8 @@
 Aplicativo nativo Kotlin para pesquisar, ouvir, salvar e organizar músicas com informações de licença abertas, respeitando os termos de cada catálogo.
 
 ## Recursos
+- **Interface inspirada na Steam**: navegação visual em azul escuro, cards com capas e barra inferior simplificada.
+- **Busca avançada**: fonte, gênero, licença para download, capa, relevância, título/artista, ordenação e correspondência estrita/relacionados.
 - Pesquisa em Wikimedia Commons, Internet Archive e Openverse.
 - Filtro **Mais populares** usando a contagem real de downloads do Internet Archive (não ranking global).
 - Navegação por **14 categorias** (instrumental, rock, jazz, clássica, eletrônica, hip-hop, lo-fi, ambiente, natureza, meditação, pop, reggae, folk e trilhas). São termos de descoberta, não classificação certificada por faixa.
