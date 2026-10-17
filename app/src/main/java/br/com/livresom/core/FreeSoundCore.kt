@@ -19,13 +19,15 @@ import java.util.concurrent.TimeUnit
 data class Track(
     val id: String, val title: String, val artist: String, val source: String,
     val page: String, val audio: String, val license: String, val licenseUrl: String,
-    val downloadable: Boolean, val mime: String = "audio/mpeg", val local: String = ""
+    val downloadable: Boolean, val mime: String = "audio/mpeg", val local: String = "",
+    val coverUrl: String = "", val downloadsCount: Long = -1L
 ) {
     fun json(): JSONObject = JSONObject().apply {
         put("id",id); put("title",title); put("artist",artist); put("source",source)
         put("page",page); put("audio",audio); put("license",license)
         put("licenseUrl",licenseUrl); put("downloadable",downloadable)
         put("mime",mime); put("local",local)
+        put("coverUrl",coverUrl); put("downloadsCount",downloadsCount)
     }
     companion object {
         fun from(o: JSONObject) = Track(
@@ -33,7 +35,7 @@ data class Track(
             o.optString("source"),o.optString("page"),o.optString("audio"),
             o.optString("license"),o.optString("licenseUrl"),
             o.optBoolean("downloadable"),o.optString("mime","audio/mpeg"),
-            o.optString("local")
+            o.optString("local"),o.optString("coverUrl"),o.optLong("downloadsCount",-1L)
         )
     }
 }
@@ -131,7 +133,7 @@ object Search {
     fun commons(q:String):List<Track> {
         val link="https://commons.wikimedia.org/w/api.php?action=query"+
             "&generator=search&gsrsearch="+enc("filetype:audio $q")+
-            "&gsrnamespace=6&gsrlimit=20&prop=imageinfo&iiprop=url%7Cmime%7Cextmetadata"+
+            "&gsrnamespace=6&gsrlimit=20&prop=imageinfo&iiprop=url%7Cmime%7Cextmetadata&iiurlwidth=160"+
             "&format=json&formatversion=2"
         val pages=fetch(link).optJSONObject("query")?.optJSONArray("pages") ?: return emptyList()
         return (0 until pages.length()).mapNotNull { i ->
@@ -154,15 +156,18 @@ object Search {
                 page.optString("title").substringAfter(':').substringBeforeLast('.').replace('_',' '),
                 field("Artist").ifBlank { "Veja os créditos na origem" }.take(150),
                 "Wikimedia Commons",file.optString("descriptionurl"),audio,
-                license.ifBlank { "Licença não confirmada" },licenseUrl,allowed,mime
+                license.ifBlank { "Licença não confirmada" },licenseUrl,allowed,mime,
+                coverUrl=file.optString("thumburl").takeIf { it.startsWith("https://upload.wikimedia.org/") }.orEmpty()
             )
         }
     }
-    fun archive(q:String):List<Track> {
+    fun archive(q:String, popular:Boolean=false):List<Track> {
         val clean=q.replace(Regex("[^\\p{L}\\p{N} _-]")," ")
             .split(Regex("\\s+")).take(5).joinToString(" ")
         val link="https://archive.org/advancedsearch.php?q="+enc("mediatype:audio AND ($clean)")+
-            "&fl%5B%5D=identifier&fl%5B%5D=title&rows=8&output=json"
+            "&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=downloads"+
+            "&rows="+(if(popular) "18" else "8")+"&output=json"+
+            (if(popular) "&sort%5B%5D=downloads+desc" else "")
         val docs=fetch(link).optJSONObject("response")?.optJSONArray("docs") ?: return emptyList()
         val pool=Executors.newFixedThreadPool(4)
         return try {
@@ -204,7 +209,9 @@ object Search {
             "Internet Archive","https://archive.org/details/"+enc(id),
             "https://archive.org/download/"+enc(id)+"/"+enc(name).replace("%2F","/"),
             if(allowed) license else "Licença não verificada",
-            if(allowed) license else "",allowed,mime)
+            if(allowed) license else "",allowed,mime,
+            coverUrl="https://archive.org/services/img/"+enc(id),
+            downloadsCount=d.optLong("downloads",-1L))
     }
     fun openverse(q:String):List<Track> {
         val results=fetch("https://api.openverse.org/v1/audio/?q="+enc(q)+"&page_size=20")
@@ -218,7 +225,9 @@ object Search {
             Track("openverse:"+item.optString("id"),
                 item.optString("title","Sem título"),item.optString("creator","Desconhecido"),
                 "Openverse",page,item.optString("url").takeIf { it.startsWith("https://") }.orEmpty(),
-                item.optString("license","Verifique licença"),item.optString("license_url"),false)
+                item.optString("license","Verifique licença"),item.optString("license_url"),false,
+                coverUrl=item.optString("id").takeIf { it.matches(Regex("[a-fA-F0-9-]{36}")) }
+                    ?.let { "https://api.openverse.org/v1/audio/$it/thumb/" }.orEmpty())
         }
     }
 }

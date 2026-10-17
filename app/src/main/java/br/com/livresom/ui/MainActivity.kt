@@ -21,6 +21,7 @@ import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -28,11 +29,14 @@ import android.widget.TextView
 import android.widget.Toast
 import br.com.livresom.core.Downloads
 import br.com.livresom.core.Library
+import br.com.livresom.core.Ranking
 import br.com.livresom.core.Player
 import br.com.livresom.core.Saved
 import br.com.livresom.core.Search
 import br.com.livresom.core.Track
 import java.util.concurrent.Executors
+import java.text.NumberFormat
+import java.util.Locale
 
 class MainActivity : Activity() {
     private val bg=Color.rgb(11,17,26)
@@ -51,11 +55,13 @@ class MainActivity : Activity() {
     private lateinit var searchEdit:EditText
     private lateinit var nav:LinearLayout
     private lateinit var playerLabel:TextView
+    private lateinit var playerArtwork:ImageView
     private lateinit var playerToggle:Button
     private lateinit var seek:SeekBar
     private lateinit var timing:TextView
     private var tab=0
     private var filter=0
+    private var popularOnly=false
     private var lastQuery=""
     private var serial=0
     private var searching=false
@@ -150,7 +156,13 @@ class MainActivity : Activity() {
             background=rounded(panelColor,12)
         }
         val line=horizontal().apply { gravity=Gravity.CENTER_VERTICAL }
-        line.addView(text("♫",25f,accent),LinearLayout.LayoutParams(dp(42),dp(44)))
+        playerArtwork=ImageView(this).apply {
+            scaleType=ImageView.ScaleType.CENTER_CROP
+            setImageResource(br.com.livresom.R.drawable.ic_livresom)
+            background=rounded(panelAlt,10)
+            clipToOutline=true
+        }
+        line.addView(playerArtwork,LinearLayout.LayoutParams(dp(46),dp(46)).apply { marginEnd=dp(10) })
         val titles=vertical()
         titles.addView(text("REPRODUTOR",10f,muted,true))
         playerLabel=text("Nenhuma música",14f,white,true).apply { maxLines=1 }
@@ -196,36 +208,69 @@ class MainActivity : Activity() {
     }
     private fun renderSearch() {
         heading("Descubra músicas","Licenças declaradas nas fontes; confira cada obra.")
-        val chips=horizontal()
-        listOf("Todas","Commons","Archive","Openverse").forEachIndexed { i,name ->
-            chips.addView(button(name,i==filter) { filter=i;render() },
-                LinearLayout.LayoutParams(0,dp(37),1f).apply { marginEnd=dp(4) })
+        val orderRow=horizontal()
+        orderRow.addView(button("Relevância",!popularOnly) {
+            if(popularOnly) { popularOnly=false;filter=0;switchRanking() }
+        },weight())
+        orderRow.addView(button("★ Mais populares",popularOnly) {
+            if(!popularOnly) { popularOnly=true;filter=0;switchRanking() }
+        },weight())
+        content.addView(orderRow)
+        space(9)
+        if(popularOnly) {
+            note("Mais baixadas no Archive",
+                "Ordem pela contagem acumulada de downloads do item no Internet Archive. " +
+                "Não é um ranking mundial de músicas. Digite um termo ou explore músicas populares sem pesquisar.")
+        } else {
+            val chips=horizontal()
+            listOf("Todas","Commons","Archive","Openverse").forEachIndexed { i,name ->
+                chips.addView(button(name,i==filter) { filter=i;render() },
+                    LinearLayout.LayoutParams(0,dp(37),1f).apply { marginEnd=dp(4) })
+            }
+            content.addView(chips)
         }
-        content.addView(chips)
-        space(13)
+        space(10)
         if(searching) note("Pesquisando...","Consultando os catálogos disponíveis.")
         if(!searching && songs.isEmpty()) {
-            note("Comece por uma pesquisa","Experimente piano, chuva, instrumental, jazz ou natureza.")
+            note(if(lastQuery.isBlank()) "Comece por uma pesquisa" else "Nenhum resultado",
+                if(lastQuery.isBlank()) "Pesquise piano, chuva, instrumental, jazz ou natureza."
+                else "Tente outro termo ou consulte as fontes oficiais.")
         }
         if(errors.isNotEmpty()) note("Algumas fontes falharam",errors.joinToString("; ").take(230))
-        songs.filter { filter==0 || when(filter) {
-            1->it.source=="Wikimedia Commons"
-            2->it.source=="Internet Archive"
-            else->it.source=="Openverse"
-        }}.forEach { songCard(it) }
+        val filtered=songs.filter { track ->
+            if(popularOnly) track.source=="Internet Archive" && track.downloadsCount>=0
+            else filter==0 || when(filter) {
+                1->track.source=="Wikimedia Commons"
+                2->track.source=="Internet Archive"
+                else->track.source=="Openverse"
+            }
+        }
+        val ordered=if(popularOnly) Ranking.mostDownloaded(filtered) else filtered
+        ordered.forEach { songCard(it) }
+    }
+    private fun switchRanking() {
+        if(searchEdit.text.toString().isNotBlank() || popularOnly) {
+            startSearch()
+        } else {
+            songs.clear();lastQuery="";render()
+        }
     }
     private fun startSearch() {
-        val term=searchEdit.text.toString().trim()
+        val term=searchEdit.text.toString().trim().ifBlank { if(popularOnly) "music" else "" }
         if(term.length<2) { toast("Digite pelo menos 2 caracteres");return }
         lastQuery=term
         serial++
         val request=serial
         completed=0;searching=true;songs.clear();errors.clear();render()
-        val sources=listOf(
-            Pair("Wikimedia", { Search.commons(term) }),
-            Pair("Internet Archive", { Search.archive(term) }),
-            Pair("Openverse", { Search.openverse(term) })
-        )
+        val sources=if(popularOnly) {
+            listOf(Pair("Internet Archive", { Search.archive(term,true) }))
+        } else {
+            listOf(
+                Pair("Wikimedia", { Search.commons(term) }),
+                Pair("Internet Archive", { Search.archive(term) }),
+                Pair("Openverse", { Search.openverse(term) })
+            )
+        }
         sources.forEach { (name,call) ->
             workers.execute {
                 val result=try { call() } catch(e:Exception) {
@@ -246,10 +291,19 @@ class MainActivity : Activity() {
     }
     private fun songCard(t:Track) {
         val box=panel()
-        box.addView(text(t.title,16f,white,true))
-        tiny(box,t.artist+" • "+t.source)
-        spaceIn(box,5)
-        box.addView(text(t.license.ifBlank { "Verificar direitos" },11f,accent))
+        val headingRow=horizontal().apply { gravity=Gravity.CENTER_VERTICAL }
+        headingRow.addView(cover(t),LinearLayout.LayoutParams(dp(76),dp(76)).apply { marginEnd=dp(12) })
+        val information=vertical()
+        information.addView(text(t.title,16f,white,true).apply { maxLines=2 })
+        tiny(information,t.artist+" • "+t.source)
+        spaceIn(information,5)
+        if(t.downloadsCount>=0 && t.source=="Internet Archive") {
+            information.addView(text(formatDownloads(t.downloadsCount)+" downloads do item",11f,muted))
+            spaceIn(information,3)
+        }
+        information.addView(text(t.license.ifBlank { "Verificar direitos" },11f,accent))
+        headingRow.addView(information,LinearLayout.LayoutParams(0,-2,1f))
+        box.addView(headingRow)
         spaceIn(box,11)
         val row=horizontal()
         row.addView(button("Ouvir",true) { preview(t) },weight())
@@ -267,6 +321,13 @@ class MainActivity : Activity() {
         box.addView(row2)
         content.addView(box,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(9) })
     }
+    private fun formatDownloads(count:Long)=NumberFormat.getIntegerInstance(Locale("pt","BR")).format(count)
+    private fun cover(t:Track,local:Uri?=null)=ImageView(this).apply {
+        scaleType=ImageView.ScaleType.CENTER_CROP
+        background=rounded(panelAlt,11)
+        clipToOutline=true
+        ArtworkLoader.bind(this@MainActivity,this,t,local)
+    }
     private fun renderLibrary() {
         heading("Minha biblioteca","Arquivos salvos e suas músicas favoritas.")
         content.addView(button("Importar áudio do celular",true) { importAudio() },
@@ -276,18 +337,25 @@ class MainActivity : Activity() {
         if(saved.isEmpty()) note("Sem downloads","Baixe arquivos autorizados ou importe áudios locais.")
         saved.forEach { s ->
             val box=panel()
-            box.addView(text(s.track.title,15f,white,true))
-            tiny(box,if(s.downloadId==0L) "Arquivo local" else when(downloads.status(s.downloadId)) {
+            val itemRow=horizontal().apply { gravity=Gravity.CENTER_VERTICAL }
+            val savedUri=downloads.uri(s)
+            itemRow.addView(cover(s.track,savedUri),LinearLayout.LayoutParams(dp(64),dp(64)).apply { marginEnd=dp(12) })
+            val details=vertical()
+            details.addView(text(s.track.title,15f,white,true).apply { maxLines=2 })
+            tiny(details,if(s.downloadId==0L) "Arquivo local" else when(downloads.status(s.downloadId)) {
                 DownloadManager.STATUS_SUCCESSFUL->"Salvo para ouvir offline"
                 DownloadManager.STATUS_RUNNING->"Baixando..."
                 DownloadManager.STATUS_PENDING->"Aguardando download..."
                 else->"Verificar download"
             })
+            itemRow.addView(details,LinearLayout.LayoutParams(0,-2,1f))
+            box.addView(itemRow)
             spaceIn(box,8)
             val row=horizontal()
             row.addView(button("Reproduzir",true) {
                 val uri=downloads.uri(s)
-                if(uri!=null) player.open(s.track.title,uri) else toast("Download indisponível")
+                if(uri!=null) { player.open(s.track.title,uri);ArtworkLoader.bind(this,playerArtwork,s.track,uri) }
+                else toast("Download indisponível")
             },weight())
             row.addView(button("Remover",false) { confirmDelete(s) },weight())
             box.addView(row)
@@ -335,7 +403,10 @@ class MainActivity : Activity() {
             t.audio.startsWith("https://")->Uri.parse(t.audio)
             else->null
         }
-        if(uri==null) toast("Abra o catálogo de origem para escutar") else player.open(t.title,uri)
+        if(uri==null) toast("Abra o catálogo de origem para escutar") else {
+            player.open(t.title,uri)
+            ArtworkLoader.bind(this,playerArtwork,t)
+        }
     }
     private fun startDownload(t:Track) {
         try {
