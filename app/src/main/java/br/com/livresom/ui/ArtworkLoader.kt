@@ -71,17 +71,21 @@ internal object ArtworkLoader {
         }
     }
 
-    private fun acceptedUrl(value:String):Boolean {
-        val url=try { URI(value) } catch (_:Exception) { return false }
-        if(!url.scheme.equals("https",true) || url.userInfo!=null || url.port!=-1) return false
-        return when(url.host?.lowercase()) {
-            "archive.org","api.openverse.org","upload.wikimedia.org" -> true
+    private fun validLocation(value:String,original:String):Boolean {
+        val u=try { URI(value) } catch (_:Exception) { return false }
+        val root=try { URI(original).host?.lowercase() } catch (_:Exception) { null }
+        if(!u.scheme.equals("https",true) || u.userInfo!=null || u.port!=-1) return false
+        val host=u.host?.lowercase() ?: return false
+        return when(root) {
+            "archive.org" -> host=="archive.org" || host.endsWith(".archive.org")
+            "api.openverse.org" -> host=="api.openverse.org" || host.endsWith(".openverse.org")
+            "upload.wikimedia.org" -> host=="upload.wikimedia.org" || host.endsWith(".wikimedia.org")
             else -> false
         }
     }
 
     private fun fromNetwork(ctx:Context,url:String):Bitmap? {
-        if(!acceptedUrl(url)) return null
+        if(!validLocation(url,url)) return null
         val dir=File(ctx.cacheDir,"freesound_covers")
         val name=MessageDigest.getInstance("SHA-256").digest(url.toByteArray())
             .joinToString("") { "%02x".format(it) } + ".img"
@@ -91,34 +95,53 @@ internal object ArtworkLoader {
             if(b!=null) return b
             file.delete()
         }
-        val c=URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout=6000
-        c.readTimeout=8500
-        c.instanceFollowRedirects=false // Don't fetch image from untrusted redirects.
-        c.setRequestProperty("Accept","image/*")
-        c.setRequestProperty("User-Agent","FreeSound/1.0 (Android)")
-        return try {
-            if(c.responseCode!=HttpURLConnection.HTTP_OK) return null
-            if(!c.contentType.orEmpty().startsWith("image/")) return null
-            if(c.contentLength>MAX_IMAGE_BYTES) return null
-            val output=ByteArrayOutputStream()
-            c.inputStream.use { input ->
-                val buffer=ByteArray(8192)
-                while(true) {
-                    val n=input.read(buffer)
-                    if(n<0) break
-                    if(output.size()+n>MAX_IMAGE_BYTES) return null
-                    output.write(buffer,0,n)
-                }
-            }
-            val bytes=output.toByteArray()
-            val bitmap=decode(bytes) ?: return null
+        val bytes=fetchImage(url) ?: return null
+        val bitmap=decode(bytes) ?: return null
+        try {
+            dir.mkdirs()
+            file.outputStream().use { it.write(bytes) }
+        } catch (_:Exception) {}
+        return bitmap
+    }
+
+    /**
+     * The Archive artwork endpoint commonly redirects to its own CDN.
+     * Follow at most 3 HTTPS redirects within the same provider-owned domain.
+     */
+    private fun fetchImage(original:String):ByteArray? {
+        var current=original
+        for(hop in 0..3) {
+            if(!validLocation(current,original)) return null
+            val c=URL(current).openConnection() as HttpURLConnection
+            c.connectTimeout=6000
+            c.readTimeout=8500
+            c.instanceFollowRedirects=false
+            c.setRequestProperty("Accept","image/*")
+            c.setRequestProperty("User-Agent","FreeSound/1.0 (Android)")
             try {
-                dir.mkdirs()
-                file.outputStream().use { it.write(bytes) }
-            } catch (_:Exception) {}
-            bitmap
-        } finally { c.disconnect() }
+                val status=c.responseCode
+                if(status in listOf(301,302,303,307,308)) {
+                    val location=c.getHeaderField("Location") ?: return null
+                    current=URI(current).resolve(location).toString()
+                    continue
+                }
+                if(status!=HttpURLConnection.HTTP_OK) return null
+                if(!c.contentType.orEmpty().lowercase().startsWith("image/")) return null
+                if(c.contentLength>MAX_IMAGE_BYTES) return null
+                val output=ByteArrayOutputStream()
+                c.inputStream.use { input ->
+                    val buffer=ByteArray(8192)
+                    while(true) {
+                        val n=input.read(buffer)
+                        if(n<0) break
+                        if(output.size()+n>MAX_IMAGE_BYTES) return null
+                        output.write(buffer,0,n)
+                    }
+                }
+                return output.toByteArray()
+            } finally { c.disconnect() }
+        }
+        return null
     }
 
     private fun decode(bytes:ByteArray):Bitmap? {
