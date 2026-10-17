@@ -31,6 +31,8 @@ import android.widget.TextView
 import android.widget.Toast
 import br.com.livresom.core.Downloads
 import br.com.livresom.core.Categories
+import br.com.livresom.core.DiscoveryPlan
+import br.com.livresom.core.DiscoveryShelf
 import br.com.livresom.core.ListeningHistory
 import br.com.livresom.core.ListenSession
 import br.com.livresom.core.Library
@@ -62,6 +64,7 @@ class MainActivity : Activity() {
     private lateinit var downloads:Downloads
     private lateinit var player:Player
     private lateinit var content:LinearLayout
+    private lateinit var contentScroll:ScrollView
     private lateinit var searchRow:LinearLayout
     private lateinit var searchEdit:EditText
     private lateinit var nav:LinearLayout
@@ -81,6 +84,15 @@ class MainActivity : Activity() {
     private var sortMode=0
     private var filtersVisible=false
     private var searchHasRun=false
+
+    // Home storefront: preserve fetched tracks across navigation, paginate lazily.
+    private val homeCache=mutableMapOf<String,List<Track>>()
+    private val homeLoading=mutableSetOf<String>()
+    private val homeRows=mutableMapOf<String,LinearLayout>()
+    private var homeHero:LinearLayout?=null
+    private var homeFeatured:Track?=null
+    private var homeNextIndex=0
+    private var homeAppendPending=false
     private var lastQuery=""
     private var serial=0
     private var searching=false
@@ -174,10 +186,27 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(dp(88),dp(48)).apply { leftMargin=dp(8) })
         root.addView(searchRow)
 
-        val scroller=ScrollView(this)
+        contentScroll=ScrollView(this).apply {
+            isFillViewport=false
+            isVerticalScrollBarEnabled=false
+        }
         content=vertical().apply { setPadding(dp(16),dp(5),dp(16),dp(24)) }
-        scroller.addView(content)
-        root.addView(scroller,LinearLayout.LayoutParams(-1,0,1f))
+        contentScroll.addView(content)
+        contentScroll.setOnScrollChangeListener { _,_,scrollY,_,_ ->
+            if(isHomeActive() && content.height-(scrollY+contentScroll.height)<dp(650)) {
+                // Post after layout; never queue repeated network requests here.
+                if(!homeAppendPending && homeNextIndex<DiscoveryPlan.templateCount*6) {
+                    homeAppendPending=true
+                    main.postDelayed({
+                        homeAppendPending=false
+                        if(isHomeActive() && homeNextIndex<DiscoveryPlan.templateCount*6) {
+                            appendHomeShelves(2)
+                        }
+                    },180L)
+                }
+            }
+        }
+        root.addView(contentScroll,LinearLayout.LayoutParams(-1,0,1f))
 
         val playerPanel=vertical().apply {
             setPadding(dp(17),dp(11),dp(17),dp(9))
@@ -221,20 +250,262 @@ class MainActivity : Activity() {
         }
         root.addView(nav)
     }
+    private fun isHomeActive():Boolean =
+        tab==0 && browseMode==0 && !searchHasRun &&
+            selectedCategory=="all" && searchEdit.text.toString().isBlank()
+
     private fun render() {
+        homeRows.clear()
+        homeHero=null
         content.removeAllViews();nav.removeAllViews()
         searchRow.visibility=if(tab==0 && browseMode!=2) View.VISIBLE else View.GONE
         listOf("⌂  Descobrir","♫  Biblioteca","◈  Fontes").forEachIndexed { i,name ->
-            nav.addView(navButton(name,i==tab) { tab=i;render() },
+            nav.addView(navButton(name,i==tab) {
+                if(i==0) {
+                    tab=0
+                    browseMode=0
+                    searchHasRun=false
+                    selectedCategory="all"
+                    searchEdit.setText("")
+                    filter=0
+                } else tab=i
+                render()
+                contentScroll.post { contentScroll.scrollTo(0,0) }
+            },
                 LinearLayout.LayoutParams(0,dp(47),1f).apply { marginEnd=dp(5) })
         }
         when(tab) {
-            0->renderSearch()
+            0->{
+                if(isHomeActive()) renderHomeStore()
+                else renderSearch()
+            }
             1->renderLibrary()
             else->renderSources()
         }
     }
+    /**
+     * Storefront first, filters only on demand.
+     * Real tracks are loaded from catalog APIs, not hardcoded examples.
+     */
+    private fun renderHomeStore() {
+        homeNextIndex=0
+        content.addView(text("DESCUBRA NO FREESOUND",11f,accent,true))
+        space(5)
+        content.addView(text("Sua vitrine musical",25f,white,true))
+        space(5)
+        content.addView(text("Capas, coleções e faixas livres para explorar.",12f,muted))
+        space(14)
+
+        val hero=vertical().apply {
+            setPadding(dp(14),dp(14),dp(14),dp(16))
+            background=GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.rgb(37,75,109),Color.rgb(26,46,68),panelColor))
+                .apply { cornerRadius=dp(11).toFloat() }
+        }
+        homeHero=hero
+        showHomeHero(homeFeatured)
+        content.addView(hero,LinearLayout.LayoutParams(-1,-2))
+        space(15)
+
+        val actions=horizontal()
+        actions.addView(button("☷  Busca avançada",false) {
+            searchHasRun=true
+            browseMode=0
+            render()
+        },LinearLayout.LayoutParams(0,dp(43),1f).apply { marginEnd=dp(6) })
+        actions.addView(button("↓  Mais baixadas",false) {
+            browseMode=1
+            requeryOrClear()
+        },LinearLayout.LayoutParams(0,dp(43),1f))
+        content.addView(actions)
+        space(20)
+        content.addView(text("EXPLORAR COLEÇÕES",18f,white,true))
+        space(5)
+        content.addView(text("Deslize os cards para os lados e role para descobrir mais.",12f,muted))
+        space(10)
+        appendHomeShelves(3)
+    }
+
+    private fun showHomeHero(featured:Track?) {
+        val parent=homeHero ?: return
+        parent.removeAllViews()
+        parent.addView(text("EM DESTAQUE NO CATÁLOGO",10f,accent,true))
+        spaceIn(parent,12)
+        if(featured==null) {
+            parent.addView(text("Músicas sendo carregadas…",19f,white,true))
+            spaceIn(parent,7)
+            parent.addView(text("Preparando uma faixa real dos catálogos conectados.",12f,muted))
+            spaceIn(parent,18)
+            parent.addView(text("WIKIMEDIA • ARCHIVE • OPENVERSE",10f,accent,true))
+            return
+        }
+        val row=horizontal().apply { gravity=Gravity.CENTER_VERTICAL }
+        row.addView(cover(featured),LinearLayout.LayoutParams(dp(126),dp(126)).apply {
+            marginEnd=dp(13)
+        })
+        val details=vertical()
+        details.addView(text(featured.title,18f,white,true).apply { maxLines=3 })
+        spaceIn(details,7)
+        details.addView(text(featured.artist,12f,white).apply { maxLines=2 })
+        spaceIn(details,7)
+        details.addView(text(featured.source,11f,accent,true))
+        spaceIn(details,5)
+        details.addView(text(
+            if(featured.downloadable) "DOWNLOAD DISPONÍVEL" else "VERIFICAR NA ORIGEM",
+            10f,if(featured.downloadable) green else muted,true))
+        row.addView(details,LinearLayout.LayoutParams(0,-2,1f))
+        parent.addView(row)
+        spaceIn(parent,12)
+        val buttons=horizontal()
+        buttons.addView(button("▶ OUVIR",true) { preview(featured) },
+            LinearLayout.LayoutParams(0,dp(44),1f).apply { marginEnd=dp(6) })
+        buttons.addView(button(if(featured.downloadable) "↓ BAIXAR" else "↗ ORIGEM",false) {
+            if(featured.downloadable) startDownload(featured) else openPage(featured.page)
+        },LinearLayout.LayoutParams(0,dp(44),1f))
+        parent.addView(buttons)
+    }
+
+    /** Append 2 curated rails when the user nears the bottom of the page. */
+    private fun appendHomeShelves(count:Int) {
+        if(!isHomeActive()) return
+        repeat(count) {
+            if(homeNextIndex>=DiscoveryPlan.templateCount*6) return@repeat
+            val spec=DiscoveryPlan.shelf(homeNextIndex++)
+            addHomeShelf(spec)
+        }
+        if(homeNextIndex==DiscoveryPlan.templateCount*6) {
+            content.addView(text(
+                "Fim das páginas disponíveis desta vitrine. Use a busca para descobrir outras músicas.",
+                12f,muted))
+        }
+    }
+
+    private fun addHomeShelf(spec:DiscoveryShelf) {
+        val header=horizontal().apply { gravity=Gravity.CENTER_VERTICAL }
+        val names=vertical()
+        names.addView(text(spec.title,18f,white,true))
+        names.addView(text(spec.description,11f,muted))
+        header.addView(names,LinearLayout.LayoutParams(0,-2,1f))
+        header.addView(button("VER TUDO ›",false) { openHomeShelf(spec) },
+            LinearLayout.LayoutParams(dp(95),dp(37)))
+        content.addView(header)
+        space(10)
+
+        val carousel=HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled=false
+            overScrollMode=View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        }
+        val rail=horizontal().apply {
+            setPadding(0,0,dp(7),0)
+        }
+        carousel.addView(rail)
+        content.addView(carousel,LinearLayout.LayoutParams(-1,-2))
+        space(21)
+
+        homeRows[spec.key]=rail
+        val already=homeCache[spec.key]
+        if(already!=null) fillHomeRail(rail,already)
+        else {
+            rail.addView(text("Buscando músicas e capas…",13f,muted).apply {
+                gravity=Gravity.CENTER
+                background=rounded(panelColor,8)
+            },LinearLayout.LayoutParams(dp(200),dp(140)))
+            if(homeLoading.add(spec.key)) {
+                workers.execute {
+                    val found=try {
+                        val initial=try {
+                            when(spec.catalog) {
+                                "archive" -> Search.archive(spec.query,spec.popular,spec.page)
+                                "commons" -> Search.commons(spec.query,spec.page)
+                                else -> Search.openverse(spec.query,spec.page)
+                            }
+                        } catch (_:Exception) { emptyList() }
+                        val fallback=if(initial.isEmpty() && !spec.popular) {
+                            try {
+                                if(spec.catalog=="openverse")
+                                    Search.commons(spec.query,spec.page)
+                                else Search.openverse(spec.query,spec.page)
+                            } catch (_:Exception) { emptyList() }
+                        } else emptyList()
+                        (initial+fallback).distinctBy { it.id }.take(12)
+                    } catch (_:Exception) { emptyList<Track>() }
+                    main.post {
+                        homeLoading.remove(spec.key)
+                        homeCache[spec.key]=found
+                        if(homeFeatured==null && found.isNotEmpty()) {
+                            homeFeatured=found.first()
+                            if(isHomeActive()) showHomeHero(homeFeatured)
+                        }
+                        if(isHomeActive()) homeRows[spec.key]?.let { fillHomeRail(it,found) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun fillHomeRail(rail:LinearLayout,tracks:List<Track>) {
+        rail.removeAllViews()
+        if(tracks.isEmpty()) {
+            rail.addView(text("Sem músicas desta fonte nesta página.",12f,muted).apply {
+                gravity=Gravity.CENTER
+                background=rounded(panelColor,8)
+            },LinearLayout.LayoutParams(dp(222),dp(118)))
+            return
+        }
+        tracks.forEach { track ->
+            val card=vertical().apply {
+                background=rounded(panelColor,8)
+                setPadding(dp(8),dp(8),dp(8),dp(10))
+            }
+            card.addView(cover(track),LinearLayout.LayoutParams(-1,dp(126)))
+            spaceIn(card,9)
+            card.addView(text(track.title,13f,white,true).apply {
+                maxLines=2
+                minLines=2
+            })
+            spaceIn(card,5)
+            card.addView(text(track.artist,11f,muted).apply {
+                maxLines=1
+            })
+            spaceIn(card,5)
+            card.addView(text(track.source,10f,accent).apply { maxLines=1 })
+            spaceIn(card,8)
+            val buttons=horizontal()
+            buttons.addView(button("▶",true) { preview(track) },
+                LinearLayout.LayoutParams(dp(42),dp(39)).apply { marginEnd=dp(5) })
+            buttons.addView(button(if(track.downloadable) "↓" else "↗",false) {
+                if(track.downloadable) startDownload(track) else openPage(track.page)
+            },LinearLayout.LayoutParams(0,dp(39),1f))
+            card.addView(buttons)
+            rail.addView(card,LinearLayout.LayoutParams(dp(157),-2).apply { marginEnd=dp(9) })
+        }
+    }
+
+    private fun openHomeShelf(spec:DiscoveryShelf) {
+        searchEdit.setText(spec.query)
+        browseMode=0
+        filter=when(spec.catalog) {
+            "archive" -> 1
+            "commons" -> 2
+            else -> 3
+        }
+        selectedCategory="all"
+        startSearch()
+        contentScroll.post { contentScroll.scrollTo(0,0) }
+    }
+
     private fun renderSearch() {
+        if(browseMode!=2) {
+            content.addView(button("← VOLTAR À VITRINE",false) {
+                browseMode=0
+                searchHasRun=false
+                selectedCategory="all"
+                searchEdit.setText("")
+                render()
+                contentScroll.post { contentScroll.scrollTo(0,0) }
+            },LinearLayout.LayoutParams(-1,dp(41)))
+            space(13)
+        }
         content.addView(text("SUA CENTRAL DE MÚSICA",10f,accent,true))
         space(5)
         heading("Descubra algo novo","Encontre faixas com filtros mais precisos.")

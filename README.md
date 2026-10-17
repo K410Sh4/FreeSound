@@ -3,6 +3,9 @@
 Aplicativo nativo Kotlin para pesquisar, ouvir, salvar e organizar músicas com informações de licença abertas, respeitando os termos de cada catálogo.
 
 ## Recursos
+- **Vitrine automática V2 (estilo Steam)**: destaque real de catálogo, prateleiras temáticas horizontais e paginação progressiva ao rolar, sem necessidade de buscar primeiro.
+- **Exploração contínua**: consulta páginas diferentes das APIs conforme a navegação avança, até o limite de páginas disponíveis da vitrine. Não inventa músicas.
+- **Busca separada da home**: filtros avançados só aparecem quando abertos pelo usuário, com retorno direto à vitrine.
 - **Interface inspirada na Steam**: navegação visual em azul escuro, cards com capas e barra inferior simplificada.
 - **Busca avançada**: fonte, gênero, licença para download, capa, relevância, título/artista, ordenação e correspondência estrita/relacionados.
 - Pesquisa em Wikimedia Commons, Internet Archive e Openverse.

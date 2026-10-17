@@ -130,11 +130,11 @@ private fun fetch(link:String):JSONObject {
     } finally { c.disconnect() }
 }
 object Search {
-    fun commons(q:String):List<Track> {
+    fun commons(q:String,page:Int=1):List<Track> {
         val link="https://commons.wikimedia.org/w/api.php?action=query"+
             "&generator=search&gsrsearch="+enc("filetype:audio $q")+
             "&gsrnamespace=6&gsrlimit=20&prop=imageinfo&iiprop=url%7Cmime%7Cextmetadata&iiurlwidth=160"+
-            "&format=json&formatversion=2"
+            "&format=json&formatversion=2&gsroffset="+((page.coerceAtLeast(1)-1)*20)
         val pages=fetch(link).optJSONObject("query")?.optJSONArray("pages") ?: return emptyList()
         return (0 until pages.length()).mapNotNull { i ->
             val page=pages.optJSONObject(i) ?: return@mapNotNull null
@@ -161,12 +161,12 @@ object Search {
             )
         }
     }
-    fun archive(q:String, popular:Boolean=false):List<Track> {
+    fun archive(q:String, popular:Boolean=false,page:Int=1):List<Track> {
         val clean=q.replace(Regex("[^\\p{L}\\p{N} _-]")," ")
             .split(Regex("\\s+")).take(5).joinToString(" ")
         val link="https://archive.org/advancedsearch.php?q="+enc("mediatype:audio AND ($clean)")+
             "&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=downloads"+
-            "&rows="+(if(popular) "18" else "8")+"&output=json"+
+            "&rows="+(if(popular) "18" else "8")+"&page="+page.coerceAtLeast(1)+"&output=json"+
             (if(popular) "&sort%5B%5D=downloads+desc" else "")
         val docs=fetch(link).optJSONObject("response")?.optJSONArray("docs") ?: return emptyList()
         val pool=Executors.newFixedThreadPool(4)
@@ -213,8 +213,8 @@ object Search {
             coverUrl="https://archive.org/services/img/"+enc(id),
             downloadsCount=d.optLong("downloads",-1L))
     }
-    fun openverse(q:String):List<Track> {
-        val results=fetch("https://api.openverse.org/v1/audio/?q="+enc(q)+"&page_size=20")
+    fun openverse(q:String,page:Int=1):List<Track> {
+        val results=fetch("https://api.openverse.org/v1/audio/?q="+enc(q)+"&page_size=20&page="+page.coerceAtLeast(1))
             .optJSONArray("results") ?: return emptyList()
         return (0 until results.length()).mapNotNull { i ->
             val item=results.optJSONObject(i) ?: return@mapNotNull null
