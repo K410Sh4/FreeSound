@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.View
@@ -22,12 +23,16 @@ import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import br.com.livresom.core.Downloads
+import br.com.livresom.core.Categories
+import br.com.livresom.core.ListeningHistory
+import br.com.livresom.core.ListenSession
 import br.com.livresom.core.Library
 import br.com.livresom.core.Ranking
 import br.com.livresom.core.Player
@@ -48,6 +53,8 @@ class MainActivity : Activity() {
     private val main=Handler(Looper.getMainLooper())
     private val workers=Executors.newFixedThreadPool(3)
     private lateinit var library:Library
+    private lateinit var listening:ListeningHistory
+    private var listenSession:ListenSession?=null
     private lateinit var downloads:Downloads
     private lateinit var player:Player
     private lateinit var content:LinearLayout
@@ -61,7 +68,8 @@ class MainActivity : Activity() {
     private lateinit var timing:TextView
     private var tab=0
     private var filter=0
-    private var popularOnly=false
+    private var browseMode=0 // 0 = pesquisa, 1 = mais baixadas, 2 = mais ouvidas por você
+    private var selectedCategory="all"
     private var lastQuery=""
     private var serial=0
     private var searching=false
@@ -75,6 +83,11 @@ class MainActivity : Activity() {
                 if(!seek.isPressed) seek.progress=player.position()
                 timing.text=time(player.position())+" / "+time(player.duration())
                 playerToggle.text=if(player.isPlaying()) "Ⅱ" else "▶"
+                val session=listenSession
+                if(session!=null && session.sample(SystemClock.elapsedRealtime(),player.isPlaying(),player.duration())) {
+                    listening.record(session.track)
+                    if(tab==0 && browseMode==2) render()
+                }
             }
             main.postDelayed(this,850)
         }
@@ -83,6 +96,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         library=Library(this)
+        listening=ListeningHistory(this)
         downloads=Downloads(this,library)
         player=Player(this) { playing,error ->
             runOnUiThread {
@@ -195,7 +209,7 @@ class MainActivity : Activity() {
     }
     private fun render() {
         content.removeAllViews();nav.removeAllViews()
-        searchRow.visibility=if(tab==0) View.VISIBLE else View.GONE
+        searchRow.visibility=if(tab==0 && browseMode!=2) View.VISIBLE else View.GONE
         listOf("Buscar","Biblioteca","Fontes").forEachIndexed { i,name ->
             nav.addView(button(name,i==tab) { tab=i;render() },
                 LinearLayout.LayoutParams(0,dp(44),1f).apply { marginEnd=dp(5) })
@@ -207,62 +221,118 @@ class MainActivity : Activity() {
         }
     }
     private fun renderSearch() {
-        heading("Descubra músicas","Licenças declaradas nas fontes; confira cada obra.")
-        val orderRow=horizontal()
-        orderRow.addView(button("Relevância",!popularOnly) {
-            if(popularOnly) { popularOnly=false;filter=0;switchRanking() }
-        },weight())
-        orderRow.addView(button("★ Mais populares",popularOnly) {
-            if(!popularOnly) { popularOnly=true;filter=0;switchRanking() }
-        },weight())
-        content.addView(orderRow)
+        heading("Descubra músicas",
+            "Explore por estilo ou consulte as músicas que você realmente ouviu.")
+        val sorting=horizontal()
+        listOf("Pesquisar","Mais baixadas","Mais ouvidas").forEachIndexed { i,label ->
+            sorting.addView(button(label,browseMode==i) { selectBrowseMode(i) },
+                LinearLayout.LayoutParams(0,dp(40),1f).apply { marginEnd=dp(4) })
+        }
+        content.addView(sorting)
+        space(10)
+
+        if(browseMode==2) {
+            note("Mais ouvidas por você",
+                "Histórico deste dispositivo. Uma reprodução é registrada após ouvir " +
+                "20 segundos reais (ou 55% de áudios curtos). Não é ranking mundial.")
+            val history=listening.mostListened()
+            if(history.isEmpty()) note("Sem histórico ainda",
+                "Ouça músicas pelo reprodutor para montar seu ranking pessoal.")
+            history.forEach { songCard(it.track,it.plays) }
+            return
+        }
+
+        if(browseMode==1) note("Mais baixadas do Internet Archive",
+            "Contagem acumulada dos downloads de cada item no Archive. " +
+            "Não corresponde necessariamente a reproduções da faixa.")
+        content.addView(text("Categorias",17f,white,true))
+        space(4)
+        content.addView(text("Estilos usados na pesquisa. A classificação depende dos metadados da fonte.",11f,muted))
         space(9)
-        if(popularOnly) {
-            note("Mais baixadas no Archive",
-                "Ordem pela contagem acumulada de downloads do item no Internet Archive. " +
-                "Não é um ranking mundial de músicas. Digite um termo ou explore músicas populares sem pesquisar.")
-        } else {
+        val categoryScroll=HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled=false
+        }
+        val categories=horizontal()
+        val all=listOf(Pair("all","Todas"))+Categories.options.map { Pair(it.id,it.title) }
+        all.forEach { (id,label) ->
+            val b=button(label,selectedCategory==id) { selectCategory(id) }
+            categories.addView(b,LinearLayout.LayoutParams(-2,dp(38)).apply {
+                marginEnd=dp(7)
+            })
+        }
+        categoryScroll.addView(categories)
+        content.addView(categoryScroll)
+        space(12)
+
+        if(browseMode==0) {
             val chips=horizontal()
             listOf("Todas","Commons","Archive","Openverse").forEachIndexed { i,name ->
                 chips.addView(button(name,i==filter) { filter=i;render() },
                     LinearLayout.LayoutParams(0,dp(37),1f).apply { marginEnd=dp(4) })
             }
             content.addView(chips)
+            space(12)
         }
-        space(10)
-        if(searching) note("Pesquisando...","Consultando os catálogos disponíveis.")
+        if(searching) note("Pesquisando...","Consultando os catálogos de áudio.")
         if(!searching && songs.isEmpty()) {
-            note(if(lastQuery.isBlank()) "Comece por uma pesquisa" else "Nenhum resultado",
-                if(lastQuery.isBlank()) "Pesquise piano, chuva, instrumental, jazz ou natureza."
-                else "Tente outro termo ou consulte as fontes oficiais.")
+            note("Pesquise um estilo ou artista",
+                "Selecione uma categoria acima ou digite um nome na pesquisa.")
         }
-        if(errors.isNotEmpty()) note("Algumas fontes falharam",errors.joinToString("; ").take(230))
+        if(errors.isNotEmpty()) note("Fontes indisponíveis",
+            errors.joinToString("; ").take(230))
+
         val filtered=songs.filter { track ->
-            if(popularOnly) track.source=="Internet Archive" && track.downloadsCount>=0
+            if(browseMode==1) track.source=="Internet Archive" && track.downloadsCount>=0L
             else filter==0 || when(filter) {
                 1->track.source=="Wikimedia Commons"
                 2->track.source=="Internet Archive"
                 else->track.source=="Openverse"
             }
         }
-        val ordered=if(popularOnly) Ranking.mostDownloaded(filtered) else filtered
+        val ordered=if(browseMode==1) Ranking.mostDownloaded(filtered) else filtered
         ordered.forEach { songCard(it) }
     }
-    private fun switchRanking() {
-        if(searchEdit.text.toString().isNotBlank() || popularOnly) {
-            startSearch()
+
+    private fun selectBrowseMode(mode:Int) {
+        if(mode==browseMode) return
+        browseMode=mode
+        if(mode==2) {
+            serial++
+            searching=false
+            errors.clear()
+            render()
         } else {
-            songs.clear();lastQuery="";render()
+            requeryOrClear()
         }
     }
+
+    private fun selectCategory(id:String) {
+        if(id==selectedCategory) return
+        selectedCategory=id
+        requeryOrClear()
+    }
+
+    private fun requeryOrClear() {
+        val q=Categories.queryFor(selectedCategory,searchEdit.text.toString())
+        if(q.length>=2) startSearch()
+        else {
+            serial++
+            searching=false
+            songs.clear()
+            errors.clear()
+            render()
+        }
+    }
+
     private fun startSearch() {
-        val term=searchEdit.text.toString().trim().ifBlank { if(popularOnly) "music" else "" }
-        if(term.length<2) { toast("Digite pelo menos 2 caracteres");return }
+        if(browseMode==2) { render();return }
+        val term=Categories.queryFor(selectedCategory,searchEdit.text.toString())
+        if(term.length<2) { toast("Digite ao menos 2 caracteres ou escolha uma categoria");return }
         lastQuery=term
         serial++
         val request=serial
         completed=0;searching=true;songs.clear();errors.clear();render()
-        val sources=if(popularOnly) {
+        val sources=if(browseMode==1) {
             listOf(Pair("Internet Archive", { Search.archive(term,true) }))
         } else {
             listOf(
@@ -273,10 +343,10 @@ class MainActivity : Activity() {
         }
         sources.forEach { (name,call) ->
             workers.execute {
-                val result=try { call() } catch(e:Exception) {
-                    runOnUiThread { if(serial==request) {
-                        errors.add("$name: indisponível");render()
-                    }}
+                val result=try { call() } catch(_:Exception) {
+                    runOnUiThread {
+                        if(serial==request) { errors.add("$name: indisponível");render() }
+                    }
                     emptyList()
                 }
                 runOnUiThread {
@@ -289,13 +359,17 @@ class MainActivity : Activity() {
             }
         }
     }
-    private fun songCard(t:Track) {
+    private fun songCard(t:Track,personalPlays:Int=0) {
         val box=panel()
         val headingRow=horizontal().apply { gravity=Gravity.CENTER_VERTICAL }
         headingRow.addView(cover(t),LinearLayout.LayoutParams(dp(76),dp(76)).apply { marginEnd=dp(12) })
         val information=vertical()
         information.addView(text(t.title,16f,white,true).apply { maxLines=2 })
         tiny(information,t.artist+" • "+t.source)
+        if(personalPlays>0) {
+            spaceIn(information,4)
+            information.addView(text("$personalPlays reproduções suas",11f,accent))
+        }
         spaceIn(information,5)
         if(t.downloadsCount>=0 && t.source=="Internet Archive") {
             information.addView(text(formatDownloads(t.downloadsCount)+" downloads do item",11f,muted))
@@ -354,7 +428,7 @@ class MainActivity : Activity() {
             val row=horizontal()
             row.addView(button("Reproduzir",true) {
                 val uri=downloads.uri(s)
-                if(uri!=null) { player.open(s.track.title,uri);ArtworkLoader.bind(this,playerArtwork,s.track,uri) }
+                if(uri!=null) playTrack(s.track,uri)
                 else toast("Download indisponível")
             },weight())
             row.addView(button("Remover",false) { confirmDelete(s) },weight())
@@ -404,10 +478,16 @@ class MainActivity : Activity() {
             else->null
         }
         if(uri==null) toast("Abra o catálogo de origem para escutar") else {
-            player.open(t.title,uri)
-            ArtworkLoader.bind(this,playerArtwork,t)
+            playTrack(t,uri)
         }
     }
+    private fun playTrack(t:Track,uri:Uri) {
+        listenSession=ListenSession(t)
+        player.open(t.title,uri)
+        ArtworkLoader.bind(this,playerArtwork,t,
+            if(uri.scheme=="content") uri else null)
+    }
+
     private fun startDownload(t:Track) {
         try {
             downloads.start(t)

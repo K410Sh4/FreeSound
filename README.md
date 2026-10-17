@@ -5,6 +5,8 @@ Aplicativo nativo Kotlin para pesquisar, ouvir, salvar e organizar músicas com 
 ## Recursos
 - Pesquisa em Wikimedia Commons, Internet Archive e Openverse.
 - Filtro **Mais populares** usando a contagem real de downloads do Internet Archive (não ranking global).
+- Navegação por **14 categorias** (instrumental, rock, jazz, clássica, eletrônica, hip-hop, lo-fi, ambiente, natureza, meditação, pop, reggae, folk e trilhas). São termos de descoberta, não classificação certificada por faixa.
+- Ranking **Mais ouvidas por você** com contagens locais de audição efetiva; não usa nem simula dados globais.
 - Capas oficiais dos catálogos ou imagens embutidas em arquivos locais, com cache e fallback.
 - Pré-escuta de fontes com URLs HTTPS.
 - Download via Android DownloadManager apenas para arquivos de origens autorizadas com indicação de licença CC, CC0 ou domínio público.
